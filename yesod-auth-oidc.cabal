@@ -20,13 +20,16 @@ common common-options
     -Wcpp-undef -Wimplicit-prelude -fwarn-tabs
   build-depends:
       base                         >=4.9.1.0 && <5
+    , aeson
     , base64-bytestring
     , classy-prelude-yesod         >=1.1
     , cryptonite
+    , http-client
     , oidc-client
     , shakespeare
     , text
     , time
+    , unordered-containers
     , yesod-auth >= 1.6
     , yesod-core
     , yesod-form
@@ -36,3 +39,69 @@ library
   hs-source-dirs: src
   exposed-modules:
     Yesod.Auth.OIDC
+
+Common test-properties
+  Default-Language:     Haskell2010
+  Hs-Source-Dirs:       src, test
+  Ghc-Options:          -Wall
+  Default-Extensions:   NoImplicitPrelude
+  Build-Tool-Depends:   hspec-discover:hspec-discover -any
+  Build-Depends:
+      base >= 4 && < 5
+    , aeson
+    , base64-bytestring
+    , blaze-html
+    , broch
+    , bytestring
+    , classy-prelude        >= 0.10.2
+    , classy-prelude-yesod  >= 1.1
+    , containers
+    , cryptonite
+    , directory
+    , email-validate
+    , fast-logger
+    , hspec
+    , http-client
+    , http-conduit
+    , http-types
+    , jose-jwt
+    , lens
+    , lens-regex-pcre
+    , memory
+    , monad-logger
+    , oidc-client
+    , persistent >= 2.8.2
+    , persistent-sqlite
+    , postgresql-simple
+    , reroute
+    , resource-pool
+    , shakespeare
+    , sqlite-simple
+    , text
+    , time
+    , unordered-containers
+    , wai-app-static
+    , wai-extra
+    , warp
+    , yesod
+    , yesod-auth >= 1.6
+    , yesod-core >=1.6.15  && <1.7
+    , yesod-persistent
+    , yesod-test
+
+  Other-Modules:
+    ExampleApp
+    ExampleProvider
+    ExampleProviderOpts
+    TestImport
+    Yesod.Auth.OIDC
+    Yesod.Auth.OIDCSpec
+
+Test-Suite spec
+  Import:               test-properties
+  Type:                 exitcode-stdio-1.0
+  Main-Is:              Spec.hs
+
+Executable yesod-auth-oidc-test
+  Import:               test-properties
+  Main-Is:              Spec.hs
