@@ -8,6 +8,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 -- | A yesod-auth plugin for per-tenant SSO via OpenID Connect, using
@@ -100,20 +101,25 @@ class (YesodAuth site) => YesodAuthOIDC site where
   -- called without the login_hint query parameter. Default
   -- implementation throws a 'BadLoginHint' exception.
   onBadLoginHint :: AuthHandler site TypedContent
-  onBadLoginHint = throwIO $ BadLoginHint
+  onBadLoginHint = throwIO BadLoginHint
 
   -- | Looks up configuration. If none can be found, you should handle
-  -- the fallback / error call yourself. Returns either the
-  -- configuration itself, or otherwise the Issuer URI. The Issuer URI
-  -- should only consist of the scheme (which must be "https:") and
-  -- fully qualified host name (e.g. example.com), with no path etc.
+  -- the fallback / error call yourself. Returns the ClientID for the
+  -- given identity provider, and either the provider configuration
+  -- itself, or otherwise just the Issuer URI. If the latter, this
+  -- library will use OIDC discovery to retrieve the configuration.
+  --
+  -- The Issuer URI should only consist of the scheme (which must be
+  -- "https:") and fully qualified host name (e.g. example.com), with
+  -- no path etc.
   --
   -- The full configuration could be hard-coded or the cached result
   -- of a previous discovery. Cf 'onProviderConfigDiscovered'.
   --
   -- Note that the 'Provider' is both the configuration and the result of
   -- retrieving the keyset from jwks_uri.
-  getProviderConfig :: LoginHint -> AuthHandler site (Either Provider IssuerLocation)
+  getProviderConfig ::
+    LoginHint -> AuthHandler site (Either Provider IssuerLocation, ClientId)
 
   -- | (Optional). If the tenant is configured via a discovery URL,
   -- this function will be called with the discovered result and that
@@ -123,7 +129,7 @@ class (YesodAuth site) => YesodAuthOIDC site where
   -- the minimum of the two remaining cache lifetimes returned by both
   -- http requests.
   onProviderConfigDiscovered ::
-    LoginHint -> Provider -> DiffTime -> AuthHandler site ()
+    Provider -> ClientId -> DiffTime -> AuthHandler site ()
   onProviderConfigDiscovered _ _ _ = pure ()
 
   -- | (Optional). Do something if the 'oidcCallbackR' was called with
@@ -140,10 +146,6 @@ class (YesodAuth site) => YesodAuthOIDC site where
         <p>There has been some miscommunication between your Identity Provider and our application.
         <p>Please try logging in again and contact support if the problem persists.
       |]
-
-  -- | The printable-ASCII client_id, which your app should have set
-  -- up ahead of time for each provider.
-  getClientId :: LoginHint -> Configuration -> AuthHandler site ClientId
 
   -- | The printable-ASCII client_secret which you've set up with the
   -- provider ahead of time (this library does not support the dynamic
@@ -260,11 +262,11 @@ getLoginR = do
   selectRep . provideRep . authLayout $ toWidget $ loginW rtp
 
 findProvider :: (YesodAuthOIDC site, HasHttpManager site)
-             => LoginHint -> AuthHandler site Provider
+             => LoginHint -> AuthHandler site (Provider, ClientId)
 findProvider loginHint = getProviderConfig loginHint >>= \case
-  Left provider ->
-    pure provider
-  Right issuerLoc -> do
+  (Left provider, clientId) ->
+    pure (provider, clientId)
+  (Right issuerLoc, clientId) -> do
     unless ("https:" `T.isPrefixOf` issuerLoc
             || "http://localhost" `T.isPrefixOf` issuerLoc) $
       throwIO $ TLSNotUsedException
@@ -272,8 +274,8 @@ findProvider loginHint = getProviderConfig loginHint >>= \case
           \OIDC requires all communication with the IdP to use TLS."
     mgr <- getHttpManager <$> getYesod
     provider <- liftIO $ discover issuerLoc mgr
-    onProviderConfigDiscovered loginHint provider 60
-    pure provider
+    onProviderConfigDiscovered provider clientId 60
+    pure (provider, clientId)
 
 -- | Expects 'email' and '_token' post params.
 postForwardR :: (YesodAuthOIDC site, HasHttpManager site)
@@ -284,8 +286,8 @@ postForwardR = do
   case mLoginHint of
     Nothing -> onBadLoginHint
     Just loginHint -> do
-      provider <- findProvider loginHint
-      forward loginHint provider
+      (provider, clientId) <- findProvider loginHint
+      forward loginHint provider clientId
 
 -- Generates a 64-bit nonce encoded as uri-safe base64
 genNonce :: IO ByteString
@@ -348,9 +350,9 @@ makeOIDC provider (ClientId clientId) (ClientSecret clientSecret) = do
 forward :: (YesodAuthOIDC a)
         => LoginHint
         -> Provider
+        -> ClientId
         -> AuthHandler a TypedContent
-forward loginHint provider@(Provider cfg _keyset) = do
-  clientId <- getClientId loginHint cfg
+forward loginHint provider@(Provider cfg _keyset) clientId = do
   scopes <- getScopes clientId cfg
   setSession loginHintSessionKey loginHint
   -- The OIDC protocol must never use the Client Secret at this stage,
@@ -424,6 +426,7 @@ handleCallback CallbackInput{..} = do
     Just err -> do
       mErrDesc <- lookupGetParam "error"
       mErrUri <- lookupGetParam "error_uri"
+      $logError $ "OIDC Authentication Error Response received: " <> tshow err
       selectRep . provideRep . authLayout $ toWidget
         [whamlet|
           <h1>Error
@@ -434,8 +437,7 @@ handleCallback CallbackInput{..} = do
             <p>More information: #{errUri}
         |]
     Nothing -> do
-      provider <- findProvider loginHint
-      clientId <- getClientId loginHint $ configuration provider
+      (provider, clientId) <- findProvider loginHint
       clientSecret <- getClientSecret clientId
       oidc <- makeOIDC provider clientId clientSecret
       mgr <- getHttpManager <$> getYesod

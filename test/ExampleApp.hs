@@ -127,13 +127,9 @@ instance YesodAuthOIDC App where
     let domain = snd $ T.breakOnEnd "@" loginHint
     mConfig <- liftHandler . runDB $ get $ OidcDomainKey domain
     case mConfig of
-      Just config -> pure $ Right $ oidcDomainIssuer config
+      Just cfg -> pure ( Right $ oidcDomainIssuer cfg
+                       , ClientId $ oidcDomainClientId cfg)
       Nothing -> error "No config for this domain"
-  getClientId _loginHint cfg = do
-    mOidcD <- liftHandler . runDB $ selectFirst [ OidcDomainIssuer ==. issuer cfg ] []
-    case mOidcD of
-      Just oidcD -> pure . ClientId $ oidcDomainClientId $ entityVal oidcD
-      Nothing -> error "No client ID"
   getClientSecret = pure . fakeClientSecret
   onSuccessfulAuthentication _originalLoginHint _clientId _provider tokens mUserInfo = do
     let idTok = idToken tokens
