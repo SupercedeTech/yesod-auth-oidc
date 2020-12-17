@@ -81,9 +81,13 @@ spec = withServers $ do
 
       -- POST the provider's scope approval form
       let
+        expiryParam =
+          (toStrict $ decodeUtf8 $ responseBody respProviderLogin)
+          ^. [Regex.regex|"expiry"><option value="([^"]*)"|]
+          . Regex.group 0
         approvalReq = urlEncodedBody
           [ ("client_id", encodeUtf8 $ unClientId appBrochClientId)
-          , ("expiry", "1608204675")
+          , ("expiry", encodeUtf8 expiryParam)
           , ("requested_scope", "openid")
           , ("scope", "openid")
           , ("scope", "email")
