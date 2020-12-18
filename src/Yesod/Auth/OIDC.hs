@@ -38,6 +38,7 @@ module Yesod.Auth.OIDC
   -- * Re-exported from oidc-client
   , Configuration(..)
   , Provider(..)
+  , IssuerLocation
   , Tokens(..)
   , IdTokenClaims(..)
   ) where
@@ -150,7 +151,7 @@ class (YesodAuth site) => YesodAuthOIDC site where
   -- | The printable-ASCII client_secret which you've set up with the
   -- provider ahead of time (this library does not support the dynamic
   -- registration spec).
-  getClientSecret :: ClientId -> AuthHandler site ClientSecret
+  getClientSecret :: ClientId -> Configuration -> AuthHandler site ClientSecret
 
   -- | (Optional). The scopes that you are requesting. The "openid"
   -- scope will always be included in the eventual request whether or
@@ -438,7 +439,7 @@ handleCallback CallbackInput{..} = do
         |]
     Nothing -> do
       (provider, clientId) <- findProvider loginHint
-      clientSecret <- getClientSecret clientId
+      clientSecret <- getClientSecret clientId $ configuration provider
       oidc <- makeOIDC provider clientId clientSecret
       mgr <- getHttpManager <$> getYesod
       tokens <- liftIO $ getValidTokens sessionStore oidc mgr

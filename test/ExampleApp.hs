@@ -130,7 +130,7 @@ instance YesodAuthOIDC App where
       Just cfg -> pure ( Right $ oidcDomainIssuer cfg
                        , ClientId $ oidcDomainClientId cfg)
       Nothing -> error "No config for this domain"
-  getClientSecret = pure . fakeClientSecret
+  getClientSecret clientId _ = pure $ fakeClientSecret clientId
   onSuccessfulAuthentication _originalLoginHint _clientId _provider tokens mUserInfo = do
     let idTok = idToken tokens
     -- The 'email' is sometimes in the ID Token, and sometimes in the
