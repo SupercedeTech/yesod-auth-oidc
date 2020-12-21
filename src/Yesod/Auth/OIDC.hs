@@ -168,12 +168,23 @@ class (YesodAuth site) => YesodAuthOIDC site where
 
   -- | (Required). Should return a unique identifier for this user to
   -- use as the key in the yesod app's session backend. Sent after the
-  -- user has successfully authenticated.
+  -- user has successfully authenticated and right before telling
+  -- Yesod that the user is authenticated. This function can still
+  -- cancel authentication if it throws an error or short-circuits.
   --
   -- If you are using the underlying OAuth spec for non-OIDC reasons,
   -- you can do extra work here, such as storing the access and
   -- refresh tokens.
-  onSuccessfulAuthentication :: LoginHint -> ClientId -> Provider
+  onSuccessfulAuthentication ::
+    LoginHint
+    -- ^ *Warning*: This is original login hint (typically an email),
+    -- does *not* assert anything about the user's identity. The user
+    -- could have logged in with an email different to this one, or
+    -- their email at the Identity Provider could just be different to
+    -- this hint. Use the information in the ID Token and UserInfo
+    -- Response for authentic identity information.
+    -> ClientId
+    -> Provider
     -> Tokens J.Object
     -- ^ The OIDC 'Token Response', including a fully validated ID
     -- Token. The 'otherClaims' value is purposefully an unparsed JSON
