@@ -29,6 +29,7 @@ module Yesod.Auth.OIDC
   , UserInfo
   , UserInfoPreference(..)
   , YesodAuthOIDC(..)
+  , OAuthErrorResponse(..)
 
   -- * Routes
   , oidcLoginR
@@ -134,19 +135,34 @@ class (YesodAuth site) => YesodAuthOIDC site where
   onProviderConfigDiscovered _ _ _ = pure ()
 
   -- | (Optional). Do something if the 'oidcCallbackR' was called with
-  -- incorrect parameters. This could happen if the request is not
-  -- legitimate or if the identity provider doesn't provide the
-  -- required `state` or `code` query or post parameters.
+  -- incorrect parameters or the Identity Provider returned an
+  -- error. This could happen if the request is not legitimate or if
+  -- the identity provider doesn't provide the required `state` or
+  -- `code` query or post parameters.
   --
-  -- The default: show a default error message
-  onBadCallbackRequest :: AuthHandler site TypedContent
-  onBadCallbackRequest =
-    selectRep . provideRep . authLayout $ toWidget
-      [whamlet|
-        <h1>Error
-        <p>There has been some miscommunication between your Identity Provider and our application.
-        <p>Please try logging in again and contact support if the problem persists.
-      |]
+  -- Defaults to a simple page showing the error (sans the error_uri).
+  onBadCallbackRequest ::
+    Maybe OAuthErrorResponse
+    -- ^ The OAuth Error Response if present (See RFC6749 §5.2 and
+    -- OIDC §3.1.2.6). This will only be 'Just' if the "state" param
+    -- (anti-CSRF token) is valid.
+    -> AuthHandler site a
+  onBadCallbackRequest mError = do
+    errHtml <- authLayout $ toWidget widg
+    sendResponseStatus status400 errHtml
+    where
+      widg =
+        [whamlet|
+          <h1>Error
+          <p>There has been some miscommunication between your Identity Provider and our application.
+          <p>Please try logging in again and contact support if the problem persists.
+          $maybe OAuthErrorResponse err mErrDesc _ <- mError
+            <p><i>Error code:</i> #{err}
+            $maybe errDesc <- mErrDesc
+              <p><i>Error description: </i>#{errDesc}
+            $maybe errUri <- mErrDesc
+              <p><i>More information: </i>#{errUri}
+        |]
 
   -- | The printable-ASCII client_secret which you've set up with the
   -- provider ahead of time (this library does not support the dynamic
@@ -249,8 +265,8 @@ dispatch httpMethod uriPath = case (httpMethod, uriPath) of
 
   -- These two handlers are ultimately the same handler. Identity
   -- Providers may use GET or POST for the callback.
-  ("GET", ["callback"]) -> getCallbackR
-  ("POST", ["callback"]) -> postCallbackR
+  ("GET", ["callback"]) -> handleCallback GET
+  ("POST", ["callback"]) -> handleCallback POST
   _ -> notFound
 
 loginW :: (Route Auth -> Route site) -> WidgetFor site ()
@@ -385,96 +401,85 @@ forward loginHint provider@(Provider cfg _keyset) clientId = do
   redirect $ show uri
 
 data CallbackInput = CallbackInput
-  { ciUntrustedState :: Text
-  , ciUntrustedCode :: Text
+  { ciState :: Text
+  , ciCode :: Text
   }
 
-getCallbackR ::
-  (HasHttpManager site, YesodAuthOIDC site)
-  => AuthHandler site TypedContent
-getCallbackR = do
-  states <- lookupGetParams "state"
-  codes <- lookupGetParams "code"
-  case (states, codes) of
-    ([state], [code]) ->
-      handleCallback $ CallbackInput { ciUntrustedState = state
-                                     , ciUntrustedCode = code}
-    _ -> onBadCallbackRequest
+-- | As defined in RFC6749 §5.2
+data OAuthErrorResponse = OAuthErrorResponse
+  { oaeError :: Text
+  , oaeErrorDescription :: Maybe Text
+  , oaeErrorUri :: Maybe Text
+  } deriving Show
 
-postCallbackR ::
-  (HasHttpManager site, YesodAuthOIDC site)
-  => AuthHandler site TypedContent
-postCallbackR = do
-  states <- lookupPostParams "state"
-  codes <- lookupPostParams "code"
-  case (states, codes) of
-    ([state], [code]) ->
-      handleCallback $ CallbackInput { ciUntrustedState = state
-                                     , ciUntrustedCode = code}
-    _ -> onBadCallbackRequest
+asTrustedState :: YesodAuthOIDC site
+  => SessionStore IO -> [Text] -> AuthHandler site Text
+asTrustedState sessionStore = \case
+  [untrustedState] -> do
+    (mState, _) <- liftIO $ sessionStoreGet sessionStore
+    if fmap decodeUtf8 mState /= Just untrustedState
+      then onBadCallbackRequest Nothing
+      else pure untrustedState
+  _ -> onBadCallbackRequest Nothing
+
+processCallbackInput :: YesodAuthOIDC site
+  => StdMethod -> SessionStore IO -> AuthHandler site CallbackInput
+processCallbackInput reqMethod sessionStore = do
+  validState <- params "state" >>= asTrustedState sessionStore
+  codes <- params "code"
+  errs <- params "error"
+  case (codes, errs) of
+    ([code], []) ->
+      pure CallbackInput
+        { ciState = validState
+        , ciCode = code }
+    ([], [err]) -> do
+      mErrDesc <- listToMaybe <$> params "error_description"
+      mErrUri <- listToMaybe <$> params "error_uri"
+      onBadCallbackRequest $ Just $ OAuthErrorResponse err mErrDesc mErrUri
+    _ -> onBadCallbackRequest Nothing
+  where
+    params = if reqMethod == GET
+      then lookupGetParams
+      else lookupPostParams
 
 -- Providers may use GET or POST for the callback, so we
 -- handle both cases in this function
 handleCallback ::
   (HasHttpManager site, YesodAuthOIDC site)
-  => CallbackInput -> AuthHandler site TypedContent
-handleCallback CallbackInput{..} = do
-  sessionStore <- makeSessionStore
-  (mState, _savedNonce) <- liftIO $ sessionStoreGet sessionStore
+  => StdMethod -> AuthHandler site TypedContent
+handleCallback reqMethod = do
   loginHint <- lookupSession loginHintSessionKey
-    -- An invalid session at this stage would suggest this request did
-    -- not go through the normal forwarding flow, which would happen
-    -- in cross-site request attacks, so throwing this error seems
-    -- appropriate.
-    >>= maybe (throwIO InvalidSecurityTokenException) pure
+    >>= maybe (onBadCallbackRequest Nothing) pure
   deleteSession loginHintSessionKey
-  -- oidc-client will validate this state too (in addition to the
-  -- nonce), but we check it here anyway before proceeding to read and
-  -- display otherwise less-trusted data (such as the error response).
-  unless (fmap decodeUtf8 mState == Just ciUntrustedState) $
-    throwIO InvalidSecurityTokenException
-  mErr <- lookupGetParam "error"
-  case mErr of
-    Just err -> do
-      mErrDesc <- lookupGetParam "error"
-      mErrUri <- lookupGetParam "error_uri"
-      $logError $ "OIDC Authentication Error Response received: " <> tshow err
-      selectRep . provideRep . authLayout $ toWidget
-        [whamlet|
-          <h1>Error
-          $maybe errDesc <- mErrDesc
-            <p>#{errDesc}
-          <p><i>Error code:</i> #{err}
-          $maybe errUri <- mErrUri
-            <p>More information: #{errUri}
-        |]
-    Nothing -> do
-      (provider, clientId) <- findProvider loginHint
-      clientSecret <- getClientSecret clientId $ configuration provider
-      oidc <- makeOIDC provider clientId clientSecret
-      mgr <- getHttpManager <$> getYesod
-      tokens <- liftIO $ getValidTokens sessionStore oidc mgr
-                (encodeUtf8 ciUntrustedState) (encodeUtf8 ciUntrustedCode)
-      let posixExpiryTime = case Client.exp $ idToken tokens of
-            IntDate posixTime -> floor @POSIXTime @Int posixTime
-      userInfoPref <- getUserInfoPreference loginHint clientId (configuration provider)
-      requestedClaims <- HashSet.delete Scopes.openId . HashSet.fromList
-                         <$> getScopes clientId (configuration provider)
-      let missingClaims = requestedClaims
-            `HashSet.difference` HM.keysSet (otherClaims $ idToken tokens)
-      mUserInfo <- case (userInfoPref, userinfoEndpoint $ configuration provider) of
-        (GetUserInfoIfAvailable, Just uri) -> liftIO $
-          handleAny (const (pure Nothing)) $ requestUserInfo mgr tokens uri
-        (GetUserInfoOnlyToSatisfyRequestedScopes, Just uri)
-          | not (HashSet.null missingClaims) -> liftIO $
-            handleAny (const (pure Nothing)) $ requestUserInfo mgr tokens uri
-        _ -> pure Nothing
-      userId <- onSuccessfulAuthentication loginHint clientId provider tokens mUserInfo
-      setCredsRedirect Creds
-        { credsPlugin = oidcPluginName
-        , credsIdent = userId
-        , credsExtra = [("iss", iss $ idToken tokens), ("exp", tshow posixExpiryTime)]
-        }
+  sessionStore <- makeSessionStore
+  CallbackInput{..} <- processCallbackInput reqMethod sessionStore
+  (provider, clientId) <- findProvider loginHint
+  clientSecret <- getClientSecret clientId $ configuration provider
+  oidc <- makeOIDC provider clientId clientSecret
+  mgr <- getHttpManager <$> getYesod
+  tokens <- liftIO $ getValidTokens sessionStore oidc mgr
+            (encodeUtf8 ciState) (encodeUtf8 ciCode)
+  let posixExpiryTime = case Client.exp $ idToken tokens of
+        IntDate posixTime -> floor @POSIXTime @Int posixTime
+  userInfoPref <- getUserInfoPreference loginHint clientId (configuration provider)
+  requestedClaims <- HashSet.delete Scopes.openId . HashSet.fromList
+                     <$> getScopes clientId (configuration provider)
+  let missingClaims = requestedClaims
+        `HashSet.difference` HM.keysSet (otherClaims $ idToken tokens)
+  mUserInfo <- case (userInfoPref, userinfoEndpoint $ configuration provider) of
+    (GetUserInfoIfAvailable, Just uri) -> liftIO $
+      handleAny (const (pure Nothing)) $ requestUserInfo mgr tokens uri
+    (GetUserInfoOnlyToSatisfyRequestedScopes, Just uri)
+      | not (HashSet.null missingClaims) -> liftIO $
+        handleAny (const (pure Nothing)) $ requestUserInfo mgr tokens uri
+    _ -> pure Nothing
+  userId <- onSuccessfulAuthentication loginHint clientId provider tokens mUserInfo
+  setCredsRedirect Creds
+    { credsPlugin = oidcPluginName
+    , credsIdent = userId
+    , credsExtra = [("iss", iss $ idToken tokens), ("exp", tshow posixExpiryTime)]
+    }
 
 requestUserInfo ::
   HTTP.Manager -> Tokens J.Object -> Text -> IO (Maybe J.Object)
