@@ -1,0 +1,38 @@
+cabal-version: 2.2
+name: yesod-auth-oidc
+version: 0.0.0
+build-type: Simple
+category: Web, Yesod
+extra-source-files: README.md
+description:
+  A yesod-auth plugin for multi-tenant SSO via OpenID Connect, using
+  Authorization Code flow (AKA server flow).
+
+  Please see the README.md file for more documentation.
+
+common common-options
+  default-language: Haskell2010
+  default-extensions: NoImplicitPrelude
+  hs-source-dirs: src
+  ghc-options:
+    -O2 -Wall -Werror -Wincomplete-uni-patterns
+    -Wincomplete-record-updates -Widentities -Wredundant-constraints
+    -Wcpp-undef -Wimplicit-prelude -fwarn-tabs
+  build-depends:
+      base                         >=4.9.1.0 && <5
+    , base64-bytestring
+    , classy-prelude-yesod         >=1.1
+    , cryptonite
+    , oidc-client
+    , shakespeare
+    , text
+    , time
+    , yesod-auth >= 1.6
+    , yesod-core
+    , yesod-form
+
+library
+  import: common-options
+  hs-source-dirs: src
+  exposed-modules:
+    Yesod.Auth.OIDC
