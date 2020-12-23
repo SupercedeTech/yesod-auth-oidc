@@ -30,6 +30,7 @@ module Yesod.Auth.OIDC
   , UserInfoPreference(..)
   , YesodAuthOIDC(..)
   , OAuthErrorResponse(..)
+  , oidcSessionExpiryMiddleware
 
   -- * Routes
   , oidcLoginR
@@ -213,6 +214,12 @@ class (YesodAuth site) => YesodAuthOIDC site where
     -- such errors only manifest as an unexpected 'Nothing' here.
     -> AuthHandler site Text
 
+  -- | Defaults to clearing the credentials from the session and
+  -- redirecting to the site's login page if this happens during an
+  -- HTTP request.
+  onSessionExpiry :: HandlerFor site ()
+  onSessionExpiry = clearCreds True
+
 data UserInfoPreference
   = GetUserInfoIfAvailable
     -- ^ Always requests the userinfo, as long as the 'Provider'
@@ -321,14 +328,17 @@ postForwardR = do
 genNonce :: IO ByteString
 genNonce = Base64Url.encode <$> Crypto.getRandomBytes 64
 
+sessionPrefix :: Text
+sessionPrefix = "ya"
+
 nonceSessionKey :: Text
-nonceSessionKey = "ya-oidc-nonce"
+nonceSessionKey = sessionPrefix <> "-oidc-nonce"
 
 stateSessionKey :: Text
-stateSessionKey = "ya-oidc-state"
+stateSessionKey = sessionPrefix <> "-oidc-state"
 
 loginHintSessionKey :: Text
-loginHintSessionKey = "ya-oidc-login-hint"
+loginHintSessionKey = sessionPrefix <> "-oidc-login-hint"
 
 -- oidc-client's CodeFlow functions have a `MonadCatch m` constraint,
 -- and take a `SessionStore m` argument. Handlers in Yesod do not
@@ -475,11 +485,15 @@ handleCallback reqMethod = do
         handleAny (const (pure Nothing)) $ requestUserInfo mgr tokens uri
     _ -> pure Nothing
   userId <- onSuccessfulAuthentication loginHint clientId provider tokens mUserInfo
+  setSession sessionExpiryKey $ tshow posixExpiryTime
   setCredsRedirect Creds
     { credsPlugin = oidcPluginName
     , credsIdent = userId
     , credsExtra = [("iss", iss $ idToken tokens), ("exp", tshow posixExpiryTime)]
     }
+
+sessionExpiryKey :: Text
+sessionExpiryKey = sessionPrefix <> "-exp"
 
 requestUserInfo ::
   HTTP.Manager -> Tokens J.Object -> Text -> IO (Maybe J.Object)
@@ -501,3 +515,33 @@ requestUserInfo mgr tokens uri = do
         }
   resp <- HTTP.httpLbs req mgr
   pure $ J.decode $ responseBody resp
+
+-- | Checks if the user has authenticated via the
+-- `yesod-auth-oidc`. If so, checks for the session expiry time as
+-- returned by the original ID Token, and calls 'onSessionExpired'. We
+-- can greatly improve this by following the specs that can request
+-- re-authentication via the OIDC-defined "prompt" parameter, but this
+-- is not implemented yet.
+--
+-- You should add this to your app's middleware. This library cannot
+-- do it automatically.
+oidcSessionExpiryMiddleware :: YesodAuthOIDC site => HandlerFor site a -> HandlerFor site a
+oidcSessionExpiryMiddleware handler = do
+  mExp <- lookupSession sessionExpiryKey
+  case mExp of
+    Just ex -> do
+      let mExInt :: Maybe Int64 = readMay ex
+      case mExInt of
+        Nothing -> onSessionExpiry >> handler
+        Just exInt -> do
+          let expTime = posixSecondsToUTCTime $ realToFrac exInt
+          now <- liftIO $ getCurrentTime
+          if now > expTime
+            then do
+              onSessionExpiry
+              -- The handler almost certainly will be
+              -- short-circuited by now but for flexbility and
+              -- easier typing, we include it here:
+              handler
+            else handler
+    _ -> handler
