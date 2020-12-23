@@ -25,6 +25,8 @@ module Yesod.Auth.OIDC
   , authOIDC
   , ClientId(..)
   , ClientSecret(..)
+  , UserInfo
+  , UserInfoPreference(..)
   , YesodAuthOIDC(..)
 
   -- * Routes
@@ -43,12 +45,15 @@ import ClassyPrelude.Yesod
 import qualified "cryptonite" Crypto.Random as Crypto
 import qualified Data.Aeson as J
 import qualified Data.ByteString.Base64.URL as Base64Url
-import qualified Data.Set as Set
+import qualified Data.HashMap.Strict as HM
+import qualified Data.HashSet as HashSet
 import qualified Data.Text as T
 import Data.Time.Clock
 import Data.Time.Clock.POSIX
+import qualified Network.HTTP.Client as HTTP
 import Web.OIDC.Client as Client
 import Web.OIDC.Client.Settings
+import qualified Web.OIDC.Client.Types as Scopes
 import Yesod.Auth
 
 data YesodAuthOIDCException
@@ -73,6 +78,12 @@ authOIDC = AuthPlugin oidcPluginName dispatch loginW
 -- hint to your own app about which tenant configuration to use (based
 -- on the email domain perhaps).
 type LoginHint = Text
+
+-- | Response of call to the UserInfo Endpoint. This library does not
+-- currently support signed or encrypted responses to this particular
+-- request (unlike the ID Token response which must be signed). C.f.
+-- OIDC Core 5.3.2
+type UserInfo = J.Object
 
 -- | Write an instance of this class for your Yesod App
 class (YesodAuth site) => YesodAuthOIDC site where
@@ -256,7 +267,7 @@ findProvider loginHint = getProviderConfig loginHint >>= \case
   Right issuerLoc -> do
     unless ("https:" `T.isPrefixOf` issuerLoc
             || "http://localhost" `T.isPrefixOf` issuerLoc) $
-      throwIO $ DiscoveryException
+      throwIO $ TLSNotUsedException
         $ "The issuer location doesn't start with 'https:'. \
           \OIDC requires all communication with the IdP to use TLS."
     mgr <- getHttpManager <$> getYesod
@@ -432,9 +443,42 @@ handleCallback CallbackInput{..} = do
                 (encodeUtf8 ciUntrustedState) (encodeUtf8 ciUntrustedCode)
       let posixExpiryTime = case Client.exp $ idToken tokens of
             IntDate posixTime -> floor @POSIXTime @Int posixTime
-      userId <- onSuccessfulAuthentication loginHint clientId provider tokens
+      userInfoPref <- getUserInfoPreference loginHint clientId (configuration provider)
+      requestedClaims <- HashSet.delete Scopes.openId . HashSet.fromList
+                         <$> getScopes clientId (configuration provider)
+      let missingClaims = requestedClaims
+            `HashSet.difference` HM.keysSet (otherClaims $ idToken tokens)
+      mUserInfo <- case (userInfoPref, userinfoEndpoint $ configuration provider) of
+        (GetUserInfoIfAvailable, Just uri) -> liftIO $
+          handleAny (const (pure Nothing)) $ requestUserInfo mgr tokens uri
+        (GetUserInfoOnlyToSatisfyRequestedScopes, Just uri)
+          | not (HashSet.null missingClaims) -> liftIO $
+            handleAny (const (pure Nothing)) $ requestUserInfo mgr tokens uri
+        _ -> pure Nothing
+      userId <- onSuccessfulAuthentication loginHint clientId provider tokens mUserInfo
       setCredsRedirect Creds
         { credsPlugin = oidcPluginName
         , credsIdent = userId
         , credsExtra = [("iss", iss $ idToken tokens), ("exp", tshow posixExpiryTime)]
         }
+
+requestUserInfo ::
+  HTTP.Manager -> Tokens J.Object -> Text -> IO (Maybe J.Object)
+requestUserInfo mgr tokens uri = do
+  unless ("https:" `T.isPrefixOf` uri
+            || "http://localhost" `T.isPrefixOf` uri) $
+    throwIO $ TLSNotUsedException $ "The URI of the UserInfo Endpoint must start with https"
+  unless (T.toLower (tokenType tokens) == "bearer") $
+    -- "The client MUST NOT use an access token if it does not
+    -- understand the token type." (RFC6749 7.1). "The OAuth 2.0
+    -- token_type response parameter value MUST be Bearer" (OIDC Core
+    -- 3.1.3.3)
+    throwIO $ UnknownTokenType $ tokenType tokens
+  req0 <- HTTP.parseRequest $ T.unpack uri
+  -- Use Bearer auth as defined in RFC6750 2.1
+  let req = req0 {
+        HTTP.requestHeaders = [
+            ("Authorization" , encodeUtf8 $ "Bearer " <> accessToken tokens)]
+        }
+  resp <- HTTP.httpLbs req mgr
+  pure $ J.decode $ responseBody resp
