@@ -215,8 +215,8 @@ class (YesodAuth site) => YesodAuthOIDC site where
     -> AuthHandler site Text
 
   -- | Defaults to clearing the credentials from the session and
-  -- redirecting to the site's login page if this happens during an
-  -- HTTP request.
+  -- redirecting to the site's logoutDest (if not currently there
+  -- already or out loginDest)
   onSessionExpiry :: HandlerFor site ()
   onSessionExpiry = clearCreds True
 
@@ -518,13 +518,14 @@ requestUserInfo mgr tokens uri = do
 
 -- | Checks if the user has authenticated via the
 -- `yesod-auth-oidc`. If so, checks for the session expiry time as
--- returned by the original ID Token, and calls 'onSessionExpired'. We
--- can greatly improve this by following the specs that can request
--- re-authentication via the OIDC-defined "prompt" parameter, but this
--- is not implemented yet.
+-- returned by the original ID Token. If expired, it removes the
+-- 'sessionExpiryKey' from the session, then calls
+-- 'onSessionExpired'. We can greatly improve this by following the
+-- specs that can request re-authentication via the OIDC-defined
+-- "prompt" parameter, but this is not implemented yet.
 --
 -- You should add this to your app's middleware. This library cannot
--- do it automatically.
+-- include it automatically.
 oidcSessionExpiryMiddleware :: YesodAuthOIDC site => HandlerFor site a -> HandlerFor site a
 oidcSessionExpiryMiddleware handler = do
   mExp <- lookupSession sessionExpiryKey
@@ -538,6 +539,7 @@ oidcSessionExpiryMiddleware handler = do
           now <- liftIO $ getCurrentTime
           if now > expTime
             then do
+              deleteSession sessionExpiryKey
               onSessionExpiry
               -- The handler almost certainly will be
               -- short-circuited by now but for flexbility and
