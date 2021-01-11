@@ -11,7 +11,7 @@
 
             broch = hpOld.callCabal2nix "broch"
               (builtins.fetchGit {
-                url = "git@github.com:tekul/broch.git";
+                url = "https://github.com/tekul/broch";
                 rev = "885ace4652cad4dcd806c8c31c1a59bf6a9a3337";
                 ref = "master";
               }) {};
