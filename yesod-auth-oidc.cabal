@@ -4,6 +4,8 @@ version: 0.0.0
 build-type: Simple
 category: Web, Yesod
 extra-source-files: README.md
+license: BSD-3-Clause
+license-file: LICENSE
 description:
   A yesod-auth plugin for multi-tenant SSO via OpenID Connect, using
   Authorization Code flow (AKA server flow).
