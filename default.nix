@@ -1,20 +1,18 @@
-{ settings ? import ../../nix/settings.nix
+{ compiler ? "ghc883"
+, config ? import ./nix/pkgconfig.nix { inherit compiler; }
+, pkgs ? import ./nix/nixpkgs.nix { inherit config; }
 }:
 
 let
-  pkgs = settings.pkgs;
-  compiler = settings.compiler;
-  ignore = import ../../nix/gitignoreSource.nix { inherit (pkgs) lib; };
-  yesod-auth-oidc = settings.hpkgs.callCabal2nix "yesod-auth-oidc" (ignore.gitignoreSource ./.) {};
+  ignore = import ./nix/gitignoreSource.nix { inherit (pkgs) lib; };
+  yesod-auth-oidc = pkgs.haskell.packages."${compiler}".callCabal2nix "yesod-auth-oidc" (ignore.gitignoreSource ./.) {};
 in
 pkgs.haskell.lib.overrideCabal yesod-auth-oidc (drv: {
   src = ignore.gitignoreSource ./.;
   configureFlags = ["-f-library-only"];
-  doCheck = false;
-  doHaddock = false; # By default you don't want to wait on this
-  testHaskellDepends = [];
-  testToolDepends = [];
-  enableLibraryProfiling = settings.enableProfiling;
+  doCheck = true;
+  doHaddock = true;
+  enableLibraryProfiling = false;
   enableSeparateDataOutput = false;
   enableSharedExecutables = false;
   isLibrary = true;
