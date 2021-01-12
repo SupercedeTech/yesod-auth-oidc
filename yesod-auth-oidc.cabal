@@ -27,6 +27,7 @@ common common-options
     , classy-prelude-yesod         >=1.1
     , cryptonite
     , http-client
+    , jose-jwt
     , oidc-client
     , shakespeare
     , text

@@ -11,6 +11,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# OPTIONS_GHC -Wno-unused-imports #-}
 -- | A yesod-auth plugin for per-tenant SSO via OpenID Connect, using
 -- Authorization Code flow (AKA server flow) with client_secret_post
 -- client authentication.
@@ -43,6 +44,15 @@ module Yesod.Auth.OIDC
   , IssuerLocation
   , Tokens(..)
   , IdTokenClaims(..)
+
+  -- * Exposed or re-exported for testing and mocking
+  , MockOidcProvider(..)
+  , SessionStore(..)
+  , OIDC(..)
+  , JwsAlgJson(..)
+  , JwsAlg(..)
+  , Jwt(..)
+  , IntDate(..)
   ) where
 
 import ClassyPrelude.Yesod
@@ -56,9 +66,14 @@ import Data.Time.Clock
 import Data.Time.Clock.POSIX
 import qualified Network.HTTP.Client as HTTP
 import Web.OIDC.Client as Client
+import Web.OIDC.Client.Discovery.Provider (JwsAlgJson(..))
 import Web.OIDC.Client.Settings
 import qualified Web.OIDC.Client.Types as Scopes
 import Yesod.Auth
+
+-- For re-export for mocking:
+import Jose.Jwa (JwsAlg(..))
+import Jose.Jwt (IntDate(..), Jwt(..))
 
 data YesodAuthOIDCException
   = InvalidQueryParamsException Text
@@ -72,7 +87,7 @@ data YesodAuthOIDCException
 instance Exception YesodAuthOIDCException
 
 -- | Add this value to your YesodAuth instance's 'authPlugins' list
-authOIDC :: (HasHttpManager site, YesodAuthOIDC site) => AuthPlugin site
+authOIDC :: YesodAuthOIDC site => AuthPlugin site
 authOIDC = AuthPlugin oidcPluginName dispatch loginW
 
 -- | The login hint is sent as the `login_hint` query parameter to the
@@ -220,6 +235,20 @@ class (YesodAuth site) => YesodAuthOIDC site where
   onSessionExpiry :: HandlerFor site ()
   onSessionExpiry = clearCreds True
 
+  -- | Should return your app's 'HttpManager' or a mock for
+  -- testing. Allows high-level mocking of the 3 functions that use
+  -- the HttpManager (as opposed to a lower-level mock of the 3 HTTP
+  -- responses themselves).
+  getHttpManagerForOidc ::
+    AuthHandler site (Either MockOidcProvider HTTP.Manager)
+
+data MockOidcProvider = MockOidcProvider
+  { mopDiscover :: Text -> Provider
+  , mopGetValidTokens ::
+      SessionStore IO -> OIDC -> ByteString -> ByteString -> Tokens J.Object
+  , mopRequestUserInfo :: HTTP.Request -> Tokens (J.Object) -> Maybe J.Object
+  }
+
 data UserInfoPreference
   = GetUserInfoIfAvailable
     -- ^ Always requests the userinfo, as long as the 'Provider'
@@ -264,7 +293,7 @@ oidcForwardR = PluginR oidcPluginName ["forward"]
 oidcCallbackR :: AuthRoute
 oidcCallbackR = PluginR oidcPluginName ["callback"]
 
-dispatch :: forall site. (HasHttpManager site, YesodAuthOIDC site)
+dispatch :: forall site. YesodAuthOIDC site
          => Text -> [Text] -> AuthHandler site TypedContent
 dispatch httpMethod uriPath = case (httpMethod, uriPath) of
   ("GET", ["login"]) -> if enableLoginPage @site then getLoginR else notFound
@@ -296,7 +325,7 @@ getLoginR = do
   rtp <- getRouteToParent
   selectRep . provideRep . authLayout $ toWidget $ loginW rtp
 
-findProvider :: (YesodAuthOIDC site, HasHttpManager site)
+findProvider :: YesodAuthOIDC site
              => LoginHint -> AuthHandler site (Provider, ClientId)
 findProvider loginHint = getProviderConfig loginHint >>= \case
   (Left provider, clientId) ->
@@ -307,13 +336,14 @@ findProvider loginHint = getProviderConfig loginHint >>= \case
       throwIO $ TLSNotUsedException
         $ "The issuer location doesn't start with 'https:'. \
           \OIDC requires all communication with the IdP to use TLS."
-    mgr <- getHttpManager <$> getYesod
-    provider <- liftIO $ discover issuerLoc mgr
+    provider <- getHttpManagerForOidc >>= \case
+      Left mock -> pure $ (mopDiscover mock) issuerLoc
+      Right mgr -> liftIO $ discover issuerLoc mgr
     onProviderConfigDiscovered provider clientId 60
     pure (provider, clientId)
 
 -- | Expects 'email' and '_token' post params.
-postForwardR :: (YesodAuthOIDC site, HasHttpManager site)
+postForwardR :: YesodAuthOIDC site
             => AuthHandler site TypedContent
 postForwardR = do
   checkCsrfParamNamed defaultCsrfParamName
@@ -456,7 +486,7 @@ processCallbackInput reqMethod sessionStore = do
 -- Providers may use GET or POST for the callback, so we
 -- handle both cases in this function
 handleCallback ::
-  (HasHttpManager site, YesodAuthOIDC site)
+  YesodAuthOIDC site
   => StdMethod -> AuthHandler site TypedContent
 handleCallback reqMethod = do
   loginHint <- lookupSession loginHintSessionKey
@@ -467,9 +497,12 @@ handleCallback reqMethod = do
   (provider, clientId) <- findProvider loginHint
   clientSecret <- getClientSecret clientId $ configuration provider
   oidc <- makeOIDC provider clientId clientSecret
-  mgr <- getHttpManager <$> getYesod
-  tokens <- liftIO $ getValidTokens sessionStore oidc mgr
-            (encodeUtf8 ciState) (encodeUtf8 ciCode)
+  eMgr <- getHttpManagerForOidc
+  tokens <- case eMgr of
+    Left mock -> pure $ (mopGetValidTokens mock) sessionStore oidc
+                 (encodeUtf8 ciState) (encodeUtf8 ciCode)
+    Right mgr -> liftIO $ getValidTokens sessionStore oidc mgr
+                 (encodeUtf8 ciState) (encodeUtf8 ciCode)
   let posixExpiryTime = case Client.exp $ idToken tokens of
         IntDate posixTime -> floor @POSIXTime @Int posixTime
   userInfoPref <- getUserInfoPreference loginHint clientId (configuration provider)
@@ -479,10 +512,10 @@ handleCallback reqMethod = do
         `HashSet.difference` HM.keysSet (otherClaims $ idToken tokens)
   mUserInfo <- case (userInfoPref, userinfoEndpoint $ configuration provider) of
     (GetUserInfoIfAvailable, Just uri) -> liftIO $
-      handleAny (const (pure Nothing)) $ requestUserInfo mgr tokens uri
+      handleAny (const (pure Nothing)) $ requestUserInfo eMgr tokens uri
     (GetUserInfoOnlyToSatisfyRequestedScopes, Just uri)
       | not (HashSet.null missingClaims) -> liftIO $
-        handleAny (const (pure Nothing)) $ requestUserInfo mgr tokens uri
+        handleAny (const (pure Nothing)) $ requestUserInfo eMgr tokens uri
     _ -> pure Nothing
   userId <- onSuccessfulAuthentication loginHint clientId provider tokens mUserInfo
   setSession sessionExpiryKey $ tshow posixExpiryTime
@@ -496,8 +529,11 @@ sessionExpiryKey :: Text
 sessionExpiryKey = sessionPrefix <> "-exp"
 
 requestUserInfo ::
-  HTTP.Manager -> Tokens J.Object -> Text -> IO (Maybe J.Object)
-requestUserInfo mgr tokens uri = do
+  Either MockOidcProvider HTTP.Manager
+  -> Tokens J.Object
+  -> Text -- UserInfo Endpoint URI
+  -> IO (Maybe J.Object)
+requestUserInfo eMgr tokens uri = do
   unless ("https:" `T.isPrefixOf` uri
             || "http://localhost" `T.isPrefixOf` uri) $
     throwIO $ TLSNotUsedException $ "The URI of the UserInfo Endpoint must start with https"
@@ -513,16 +549,18 @@ requestUserInfo mgr tokens uri = do
         HTTP.requestHeaders = [
             ("Authorization" , encodeUtf8 $ "Bearer " <> accessToken tokens)]
         }
-  resp <- HTTP.httpLbs req mgr
-  pure $ J.decode $ responseBody resp
+  case eMgr of
+    Left mock -> pure $ (mopRequestUserInfo mock) req tokens
+    Right mgr -> do
+      resp <- HTTP.httpLbs req mgr
+      pure $ J.decode $ responseBody resp
 
--- | Checks if the user has authenticated via the
--- `yesod-auth-oidc`. If so, checks for the session expiry time as
--- returned by the original ID Token. If expired, it removes the
--- 'sessionExpiryKey' from the session, then calls
--- 'onSessionExpired'. We can greatly improve this by following the
--- specs that can request re-authentication via the OIDC-defined
--- "prompt" parameter, but this is not implemented yet.
+-- | Checks if the user has authenticated via `yesod-auth-oidc`. If
+-- so, checks for the session expiry time as returned by the original
+-- ID Token. If expired, it removes the 'sessionExpiryKey' from the
+-- session, then calls 'onSessionExpired'. We can greatly improve this
+-- by following the specs that can request re-authentication via the
+-- OIDC-defined "prompt" parameter, but this is not implemented yet.
 --
 -- You should add this to your app's middleware. This library cannot
 -- include it automatically.

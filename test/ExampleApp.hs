@@ -123,6 +123,7 @@ instance HasHttpManager App where
   getHttpManager = appHttpManager
 
 instance YesodAuthOIDC App where
+  getHttpManagerForOidc = Right <$> getsYesod appHttpManager
   getProviderConfig loginHint = do
     let domain = snd $ T.breakOnEnd "@" loginHint
     mConfig <- liftHandler . runDB $ get $ OidcDomainKey domain
