@@ -1,11 +1,11 @@
 # yesod-auth-oidc
 
-A Yesod authentication plugin for multi-tenant Single Sign-on (SSO) via [OpenID Connect](https://openid.net/specs/openid-connect-core-1_0.html) (OIDC Core 1.0), using Authorization Code flow (AKA server flow), as defined in OIDC Core OIDC Core §3 and §3.1.
+A Yesod authentication plugin for multi-tenant Single Sign-on (SSO) via [OpenID Connect](https://openid.net/specs/openid-connect-core-1_0.html) (OIDC Core 1.0), using Authorization Code flow (defined in §3.1, AKA server flow).
 
 * Supports multiple Identity Providers with callbacks based on the login_hint (typically an email).
 * Each provider can be configured either through OIDC Discovery or manually. (The Dynamic Registration OIDC extension is not supported).
 * Uses with your Yesod app's session library plus a small middleware. That means there's no need to rely on encrypted JWTs in the browser if you use server-side sessions.
-* Works great with [yesod-auth-simple](https://github.com/riskbook/yesod-auth-simple).
+* Works well with [yesod-auth-simple](https://github.com/riskbook/yesod-auth-simple).
 
 # Using the library
 
@@ -27,7 +27,7 @@ Also see this library's test suite, especially `test/ExampleApp.hs` and `test/Ye
 
 * [oidc-client](https://hackage.haskell.org/package/oidc-client): `yesod-auth-oidc` uses this utility library. It handles important parts such as token validation, and is not tied to Yesod.
 
-* [yesod-auth](https://hackage.haskell.org/package/yesod-auth), it's `Yesod.Auth.OpenID` module, and the the [authenticate](https://hackage.haskell.org/package/authenticate) library: this appears to be an implementation of [OpenID Authentication 2.0](https://openid.net/specs/openid-authentication-2_0.html), which is the previous "generation" of the OpenID Foundation's efforts. OpenID doesn't seem to be supported by many off-the-shelf SSO Providers (e.g. Azure AD, Auth0), unlike OIDC.
+* [yesod-auth](https://hackage.haskell.org/package/yesod-auth), its `Yesod.Auth.OpenID` module, and the the [authenticate](https://hackage.haskell.org/package/authenticate) library: this appears to be an implementation of [OpenID Authentication 2.0](https://openid.net/specs/openid-authentication-2_0.html), which is the previous "generation" of the OpenID Foundation's efforts. OpenID 2 doesn't seem to be supported by many off-the-shelf SSO Providers (e.g. Azure AD, Auth0), unlike OIDC.
 
 * [yesod-auth-oauth2](https://hackage.haskell.org/package/yesod-auth-oauth2): Offers authentication using the authorisation protocol [OAuth 2.0](https://tools.ietf.org/html/rfc6749). OIDC defines some extras on top of OAuth 2.0 to securely implement authentication.
 
@@ -37,4 +37,4 @@ Also see this library's test suite, especially `test/ExampleApp.hs` and `test/Ye
 
 * Extras such as dynamic registration, single log-out, and automatic session extension via the "prompt" parameter are not implemented.
 
-* The algorithm for determining HTTP cache lifecycle of the discovery document and JWK Set is not yet implemented. For now, you could implement most of this yourself in the appropriate callback however (or send.
+* The algorithm for determining the HTTP cache period of the discovery document and JWK Set is not yet implemented. For now, you could implement most of this yourself in the appropriate callback however (or send.
