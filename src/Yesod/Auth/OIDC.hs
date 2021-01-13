@@ -53,6 +53,7 @@ module Yesod.Auth.OIDC
   , JwsAlg(..)
   , Jwt(..)
   , IntDate(..)
+  , CallbackInput(..)
   ) where
 
 import ClassyPrelude.Yesod
@@ -245,7 +246,7 @@ class (YesodAuth site) => YesodAuthOIDC site where
 data MockOidcProvider = MockOidcProvider
   { mopDiscover :: Text -> Provider
   , mopGetValidTokens ::
-      SessionStore IO -> OIDC -> ByteString -> ByteString -> Tokens J.Object
+      LoginHint -> CallbackInput -> SessionStore IO -> OIDC -> Tokens J.Object
   , mopRequestUserInfo :: HTTP.Request -> Tokens (J.Object) -> Maybe J.Object
   }
 
@@ -493,14 +494,13 @@ handleCallback reqMethod = do
     >>= maybe (onBadCallbackRequest Nothing) pure
   deleteSession loginHintSessionKey
   sessionStore <- makeSessionStore
-  CallbackInput{..} <- processCallbackInput reqMethod sessionStore
+  cbInput@CallbackInput{..} <- processCallbackInput reqMethod sessionStore
   (provider, clientId) <- findProvider loginHint
   clientSecret <- getClientSecret clientId $ configuration provider
   oidc <- makeOIDC provider clientId clientSecret
   eMgr <- getHttpManagerForOidc
   tokens <- case eMgr of
-    Left mock -> pure $ (mopGetValidTokens mock) sessionStore oidc
-                 (encodeUtf8 ciState) (encodeUtf8 ciCode)
+    Left mock -> pure $ (mopGetValidTokens mock) loginHint cbInput sessionStore oidc
     Right mgr -> liftIO $ getValidTokens sessionStore oidc mgr
                  (encodeUtf8 ciState) (encodeUtf8 ciCode)
   let posixExpiryTime = case Client.exp $ idToken tokens of
