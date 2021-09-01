@@ -38,3 +38,7 @@ Also see this library's test suite, especially `test/ExampleApp.hs` and `test/Ye
 * Extras such as dynamic registration, single log-out, and automatic session extension via the "prompt" parameter are not implemented.
 
 * The algorithm for determining the HTTP cache period of the discovery document and JWK Set is not yet implemented. For now, you could implement most of this yourself in the appropriate callback however (or send.
+
+# Development
+
+The maintainers typically run `nix-shell` and then use GHCi or cabal from there.
