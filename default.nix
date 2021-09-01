@@ -10,6 +10,8 @@ in
 pkgs.haskell.lib.overrideCabal yesod-auth-oidc (drv: {
   src = ignore.gitignoreSource ./.;
   configureFlags = ["-f-library-only"];
+  buildTools = [ pkgs.cabal-install ];
+  testToolDepends = [ pkgs.haskell.packages."${compiler}".hspec-discover ];
   doCheck = true;
   doHaddock = true;
   enableLibraryProfiling = false;

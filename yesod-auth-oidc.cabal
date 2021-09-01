@@ -56,7 +56,6 @@ Common test-properties
   Hs-Source-Dirs:       src, test
   Ghc-Options:          -Wall
   Default-Extensions:   NoImplicitPrelude
-  Build-Tool-Depends:   hspec-discover:hspec-discover -any
   Build-Depends:
       base >= 4 && < 5
     , aeson
@@ -112,6 +111,7 @@ Test-Suite spec
   Import:               test-properties
   Type:                 exitcode-stdio-1.0
   Main-Is:              Spec.hs
+  Build-Tool-Depends:   hspec-discover:hspec-discover
 
 Executable yesod-auth-oidc-test
   Import:               test-properties
