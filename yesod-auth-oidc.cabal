@@ -6,11 +6,19 @@ category: Web, Yesod
 extra-source-files: README.md
 license: BSD-3-Clause
 license-file: LICENSE
+author: Supercede Technology Ltd
+maintainer: Supercede Technology Ltd <support@supercede.com>
+homepage: https://github.com/SupercedeTech/yesod-auth-oidc
+synopsis: A yesod-auth plugin for multi-tenant SSO via OpenID Connect
 description:
   A yesod-auth plugin for multi-tenant SSO via OpenID Connect, using
   Authorization Code flow (AKA server flow).
 
   Please see the README.md file for more documentation.
+
+source-repository head
+  type: git
+  location: git@github.com:SupercedeTech/yesod-auth-oidc.git
 
 common common-options
   default-language: Haskell2010
