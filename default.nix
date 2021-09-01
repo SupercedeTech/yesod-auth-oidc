@@ -1,4 +1,4 @@
-{ compiler ? "ghc883"
+{ compiler ? "ghc884"
 , config ? import ./nix/pkgconfig.nix { inherit compiler; }
 , pkgs ? import ./nix/nixpkgs.nix { inherit config; }
 }:
