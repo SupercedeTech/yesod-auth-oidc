@@ -16,6 +16,8 @@ description:
 
   Please see the README.md file for more documentation.
 
+tested-with: GHC == 8.10.4
+
 source-repository head
   type: git
   location: git@github.com:SupercedeTech/yesod-auth-oidc.git
