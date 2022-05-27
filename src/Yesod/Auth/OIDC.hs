@@ -60,8 +60,8 @@ import ClassyPrelude.Yesod
 import qualified "cryptonite" Crypto.Random as Crypto
 import qualified Data.Aeson as J
 import qualified Data.ByteString.Base64.URL as Base64Url
-import qualified Data.HashMap.Strict as HM
-import qualified Data.HashSet as HashSet
+import qualified Data.Aeson.KeyMap as HM
+import qualified Data.Set as HashSet
 import qualified Data.Text as T
 import Data.Time.Clock
 import Data.Time.Clock.POSIX
@@ -71,6 +71,7 @@ import Web.OIDC.Client.Discovery.Provider (JwsAlgJson(..))
 import Web.OIDC.Client.Settings
 import qualified Web.OIDC.Client.Types as Scopes
 import Yesod.Auth
+import qualified Data.Aeson.Key as Aes
 
 -- For re-export for mocking:
 import Jose.Jwa (JwsAlg(..))
@@ -88,7 +89,7 @@ data YesodAuthOIDCException
 instance Exception YesodAuthOIDCException
 
 -- | Add this value to your YesodAuth instance's 'authPlugins' list
-authOIDC :: YesodAuthOIDC site => AuthPlugin site
+authOIDC :: forall site . YesodAuthOIDC site => AuthPlugin site
 authOIDC = AuthPlugin oidcPluginName dispatch loginW
 
 -- | The login hint is sent as the `login_hint` query parameter to the
@@ -119,7 +120,7 @@ class (YesodAuth site) => YesodAuthOIDC site where
   -- | (Optional) A callback to your app in case oidcForwardR is
   -- called without the login_hint query parameter. Default
   -- implementation throws a 'BadLoginHint' exception.
-  onBadLoginHint :: AuthHandler site TypedContent
+  onBadLoginHint :: MonadAuthHandler site m => m TypedContent
   onBadLoginHint = throwIO BadLoginHint
 
   -- | Looks up configuration. If none can be found, you should handle
@@ -137,8 +138,8 @@ class (YesodAuth site) => YesodAuthOIDC site where
   --
   -- Note that the 'Provider' is both the configuration and the result of
   -- retrieving the keyset from jwks_uri.
-  getProviderConfig ::
-    LoginHint -> AuthHandler site (Either Provider IssuerLocation, ClientId)
+  getProviderConfig :: MonadAuthHandler site m =>
+    LoginHint ->  m (Either Provider IssuerLocation, ClientId)
 
   -- | (Optional). If the tenant is configured via a discovery URL,
   -- this function will be called with the discovered result and that
@@ -147,8 +148,8 @@ class (YesodAuth site) => YesodAuthOIDC site where
   -- library combines discovery with key retrieval, the given time is
   -- the minimum of the two remaining cache lifetimes returned by both
   -- http requests.
-  onProviderConfigDiscovered ::
-    Provider -> ClientId -> DiffTime -> AuthHandler site ()
+  onProviderConfigDiscovered :: MonadAuthHandler site m =>
+    Provider -> ClientId -> DiffTime ->  m ()
   onProviderConfigDiscovered _ _ _ = pure ()
 
   -- | (Optional). Do something if the 'oidcCallbackR' was called with
@@ -158,12 +159,12 @@ class (YesodAuth site) => YesodAuthOIDC site where
   -- `code` query or post parameters.
   --
   -- Defaults to a simple page showing the error (sans the error_uri).
-  onBadCallbackRequest ::
+  onBadCallbackRequest :: MonadAuthHandler site m =>
     Maybe OAuthErrorResponse
     -- ^ The OAuth Error Response if present (See RFC6749 §5.2 and
     -- OIDC §3.1.2.6). This will only be 'Just' if the "state" param
     -- (anti-CSRF token) is valid.
-    -> AuthHandler site a
+    ->  m a
   onBadCallbackRequest mError = do
     errHtml <- authLayout $ toWidget widg
     sendResponseStatus status400 errHtml
@@ -184,19 +185,19 @@ class (YesodAuth site) => YesodAuthOIDC site where
   -- | The printable-ASCII client_secret which you've set up with the
   -- provider ahead of time (this library does not support the dynamic
   -- registration spec).
-  getClientSecret :: ClientId -> Configuration -> AuthHandler site ClientSecret
+  getClientSecret :: MonadAuthHandler site m => ClientId -> Configuration ->  m ClientSecret
 
   -- | (Optional). The scopes that you are requesting. The "openid"
   -- scope will always be included in the eventual request whether or
   -- not you specify it here. Defaults to ["email"].
-  getScopes :: ClientId -> Configuration -> AuthHandler site [ScopeValue]
+  getScopes :: MonadAuthHandler site m => ClientId -> Configuration ->  m [ScopeValue]
   getScopes _ _ = pure [email]
 
   -- | (Optional). Configure the behaviour of when to request user
   -- information. The default behaviour is to only make this request
   -- if it's necessary satisfy the scopes in 'getScopes'.
-  getUserInfoPreference ::
-    LoginHint -> ClientId -> Configuration -> AuthHandler site UserInfoPreference
+  getUserInfoPreference :: MonadAuthHandler site m =>
+    LoginHint -> ClientId -> Configuration -> m UserInfoPreference
   getUserInfoPreference _ _ _ = pure GetUserInfoOnlyToSatisfyRequestedScopes
 
   -- | (Required). Should return a unique identifier for this user to
@@ -208,7 +209,7 @@ class (YesodAuth site) => YesodAuthOIDC site where
   -- If you are using the underlying OAuth spec for non-OIDC reasons,
   -- you can do extra work here, such as storing the access and
   -- refresh tokens.
-  onSuccessfulAuthentication ::
+  onSuccessfulAuthentication :: MonadAuthHandler site m =>
     LoginHint
     -- ^ *Warning*: This is original login hint (typically an email),
     -- does *not* assert anything about the user's identity. The user
@@ -228,7 +229,7 @@ class (YesodAuth site) => YesodAuthOIDC site where
     -- actually successful. For flexibility, any exceptions in the
     -- course of getting the UserInfo are caught by this library;
     -- such errors only manifest as an unexpected 'Nothing' here.
-    -> AuthHandler site Text
+    ->  m Text
 
   -- | Defaults to clearing the credentials from the session and
   -- redirecting to the site's logoutDest (if not currently there
@@ -241,7 +242,7 @@ class (YesodAuth site) => YesodAuthOIDC site where
   -- the HttpManager (as opposed to a lower-level mock of the 3 HTTP
   -- responses themselves).
   getHttpManagerForOidc ::
-    AuthHandler site (Either MockOidcProvider HTTP.Manager)
+    MonadAuthHandler site m => m (Either MockOidcProvider HTTP.Manager)
 
 data MockOidcProvider = MockOidcProvider
   { mopDiscover :: Text -> Provider
@@ -294,8 +295,8 @@ oidcForwardR = PluginR oidcPluginName ["forward"]
 oidcCallbackR :: AuthRoute
 oidcCallbackR = PluginR oidcPluginName ["callback"]
 
-dispatch :: forall site. YesodAuthOIDC site
-         => Text -> [Text] -> AuthHandler site TypedContent
+dispatch :: forall site . (YesodAuthOIDC site)
+         => Text -> [Text] -> (forall m . MonadAuthHandler site m => m TypedContent)
 dispatch httpMethod uriPath = case (httpMethod, uriPath) of
   ("GET", ["login"]) -> if enableLoginPage @site then getLoginR else notFound
   ("POST", ["forward"]) -> postForwardR
@@ -321,13 +322,13 @@ loginW toParentRoute = do
       <button type=submit aria-label="Sign in">
   |]
 
-getLoginR :: YesodAuthOIDC site => AuthHandler site TypedContent
+getLoginR :: YesodAuthOIDC site => MonadAuthHandler site m => m TypedContent
 getLoginR = do
   rtp <- getRouteToParent
   selectRep . provideRep . authLayout $ toWidget $ loginW rtp
 
-findProvider :: YesodAuthOIDC site
-             => LoginHint -> AuthHandler site (Provider, ClientId)
+findProvider :: MonadAuthHandler site m => YesodAuthOIDC site
+             => LoginHint ->  m (Provider, ClientId)
 findProvider loginHint = getProviderConfig loginHint >>= \case
   (Left provider, clientId) ->
     pure (provider, clientId)
@@ -344,8 +345,8 @@ findProvider loginHint = getProviderConfig loginHint >>= \case
     pure (provider, clientId)
 
 -- | Expects 'email' and '_token' post params.
-postForwardR :: YesodAuthOIDC site
-            => AuthHandler site TypedContent
+postForwardR :: (YesodAuthOIDC site, MonadAuthHandler site m)
+            =>  m TypedContent
 postForwardR = do
   checkCsrfParamNamed defaultCsrfParamName
   mLoginHint <- lookupPostParam "email"
@@ -375,7 +376,7 @@ loginHintSessionKey = sessionPrefix <> "-oidc-login-hint"
 -- and take a `SessionStore m` argument. Handlers in Yesod do not
 -- implement MonadCatch, so we use m ~ IO, and then unliftIO to still
 -- use Handler calls in the 'SessionStore IO'
-makeSessionStore :: AuthHandler site (SessionStore IO)
+makeSessionStore :: MonadAuthHandler site m => m (SessionStore IO)
 makeSessionStore = do
   UnliftIO unlift <- askUnliftIO
   pure $ SessionStore
@@ -398,11 +399,11 @@ newtype ClientSecret = ClientSecret { unClientSecret :: Text }
 instance Show ClientSecret where
   show _ = "<redacted-client-secret>"
 
-makeOIDC ::
+makeOIDC :: MonadAuthHandler site m =>
   Provider
   -> ClientId
   -> ClientSecret
-  -> AuthHandler site OIDC
+  ->  m OIDC
 makeOIDC provider (ClientId clientId) (ClientSecret clientSecret) = do
   urlRender <- getUrlRender
   toParent <- getRouteToParent
@@ -453,8 +454,8 @@ data OAuthErrorResponse = OAuthErrorResponse
   , oaeErrorUri :: Maybe Text
   } deriving Show
 
-asTrustedState :: YesodAuthOIDC site
-  => SessionStore IO -> [Text] -> AuthHandler site Text
+asTrustedState :: (YesodAuthOIDC site, MonadAuthHandler site m)
+  => SessionStore IO -> [Text] ->  m Text
 asTrustedState sessionStore = \case
   [untrustedState] -> do
     (mState, _) <- liftIO $ sessionStoreGet sessionStore
@@ -463,8 +464,8 @@ asTrustedState sessionStore = \case
       else pure untrustedState
   _ -> onBadCallbackRequest Nothing
 
-processCallbackInput :: YesodAuthOIDC site
-  => StdMethod -> SessionStore IO -> AuthHandler site CallbackInput
+processCallbackInput :: (YesodAuthOIDC site, MonadAuthHandler site m)
+  => StdMethod -> SessionStore IO ->  m CallbackInput
 processCallbackInput reqMethod sessionStore = do
   validState <- params "state" >>= asTrustedState sessionStore
   codes <- params "code"
@@ -484,11 +485,14 @@ processCallbackInput reqMethod sessionStore = do
       then lookupGetParams
       else lookupPostParams
 
+keySet :: J.Object -> Set Text
+keySet = HashSet.fromList . fmap Aes.toText . HM.keys
+
 -- Providers may use GET or POST for the callback, so we
 -- handle both cases in this function
 handleCallback ::
-  YesodAuthOIDC site
-  => StdMethod -> AuthHandler site TypedContent
+  (YesodAuthOIDC site, MonadAuthHandler site m)
+  => StdMethod -> m TypedContent
 handleCallback reqMethod = do
   loginHint <- lookupSession loginHintSessionKey
     >>= maybe (onBadCallbackRequest Nothing) pure
@@ -508,8 +512,10 @@ handleCallback reqMethod = do
   userInfoPref <- getUserInfoPreference loginHint clientId (configuration provider)
   requestedClaims <- HashSet.delete Scopes.openId . HashSet.fromList
                      <$> getScopes clientId (configuration provider)
-  let missingClaims = requestedClaims
-        `HashSet.difference` HM.keysSet (otherClaims $ idToken tokens)
+  let
+    missingClaims :: Set Text
+    missingClaims = requestedClaims
+        `HashSet.difference` keySet (otherClaims $ idToken tokens)
   mUserInfo <- case (userInfoPref, userinfoEndpoint $ configuration provider) of
     (GetUserInfoIfAvailable, Just uri) -> liftIO $
       handleAny (const (pure Nothing)) $ requestUserInfo eMgr tokens uri

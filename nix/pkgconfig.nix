@@ -1,23 +1,20 @@
-{ compiler }:
 { packageOverrides = pkgs: {
-    haskell = pkgs.haskell // {
-      packages = pkgs.haskell.packages // {
-        "${compiler}" = pkgs.haskell.packages."${compiler}".override {
-          overrides = hpNew: hpOld: rec {
-
+    haskellPackages = pkgs.haskellPackages.extend(hpNew: hpOld: {
             # The tests make connections to google which can fail on CI setups
             oidc-client = pkgs.haskell.lib.markUnbroken
               (pkgs.haskell.lib.dontCheck hpOld.oidc-client);
 
+            jose-jwt = pkgs.haskell.lib.markUnbroken hpOld.jose-jwt;
+
+            yesod-auth-oidc = hpNew.callPackage ../. {};
+
             broch = hpOld.callCabal2nix "broch"
               (builtins.fetchGit {
-                url = "https://github.com/tekul/broch";
-                rev = "885ace4652cad4dcd806c8c31c1a59bf6a9a3337";
-                ref = "master";
+                url = "https://github.com/SupercedeTech/broch";
+                rev = "548be56666a490cc15b8442d96a38952f2e9a0ca";
+                ref = "make-it-build-with-latest-nixpkgs";
               }) {};
-          };
-        };
-      };
-    };
+
+        });
   };
 }
