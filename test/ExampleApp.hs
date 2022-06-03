@@ -20,7 +20,7 @@ module ExampleApp where
 
 import ClassyPrelude.Yesod
 import qualified Data.Aeson as J
-import qualified Data.HashMap.Strict as HM
+import qualified Data.Aeson.KeyMap as HM
 import qualified Data.Text as T
 import Database.Persist.Sql
 import ExampleProviderOpts
@@ -36,27 +36,6 @@ data App = App
   , appBrochClientId :: ClientId
   }
 
-mkYesod "App" [parseRoutes|
-/ HomeR GET
-/auth AuthR Auth getAuth
-/convenient-test-token CsrfTokenR GET
-/protected/resource ProtectedResourceR GET
-|]
-
-getHomeR :: Handler ()
-getHomeR = pure ()
-
-getCsrfTokenR :: Handler Text
-getCsrfTokenR = do
-  setCsrfCookie
-  reqToken <$> getRequest >>= \case
-    Nothing -> error "app unexpectedly started without session storage"
-    Just t -> pure t
-
-getProtectedResourceR :: Handler J.Value
-getProtectedResourceR = do
-  uid <- requireAuthId
-  pure $ J.String $ tshow uid
 
 share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
 OidcConfig
@@ -90,14 +69,14 @@ User
   deriving Show
 |]
 
+mkYesod "App" [parseRoutes|
+/ HomeR GET
+/auth AuthR Auth getAuth
+/convenient-test-token CsrfTokenR GET
+/protected/resource ProtectedResourceR GET
+|]
+
 instance Yesod App where
-
-instance YesodPersist App where
-  type YesodPersistBackend App = SqlBackend
-
-  runDB :: SqlPersistT Handler a -> Handler a
-  runDB db = getsYesod appConnPool >>= runSqlPool db
-
 instance YesodAuth App where
   type AuthId App = Key User
   loginDest _ = HomeR
@@ -105,6 +84,30 @@ instance YesodAuth App where
   authPlugins _ = [ authOIDC ]
   getAuthId = return . fromPathPiece . credsIdent
   maybeAuthId = defaultMaybeAuthId
+
+
+getHomeR :: Handler ()
+getHomeR = pure ()
+
+getCsrfTokenR :: Handler Text
+getCsrfTokenR = do
+  setCsrfCookie
+  reqToken <$> getRequest >>= \case
+    Nothing -> error "app unexpectedly started without session storage"
+    Just t -> pure t
+
+getProtectedResourceR :: Handler J.Value
+getProtectedResourceR = do
+  uid <- requireAuthId
+  pure $ J.String $ tshow uid
+
+
+instance YesodPersist App where
+  type YesodPersistBackend App = SqlBackend
+
+  runDB :: SqlPersistT Handler a -> Handler a
+  runDB db = getsYesod appConnPool >>= runSqlPool db
+
 
 addProvider ::
   ( PersistStoreWrite (YesodPersistBackend (HandlerSite f))
