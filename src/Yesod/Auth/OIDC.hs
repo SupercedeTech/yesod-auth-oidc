@@ -1,4 +1,5 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
@@ -335,9 +336,10 @@ findProvider loginHint = getProviderConfig loginHint >>= \case
   (Right issuerLoc, clientId) -> do
     unless ("https:" `T.isPrefixOf` issuerLoc
             || "http://localhost" `T.isPrefixOf` issuerLoc) $
-      throwIO $ TLSNotUsedException
-        $ "The issuer location doesn't start with 'https:'. \
-          \OIDC requires all communication with the IdP to use TLS."
+      throwIO $ TLSNotUsedException $ unwords
+        [ "The issuer location doesn't start with 'https:'. "
+        , "OIDC requires all communication with the IdP to use TLS."
+        ]
     provider <- getHttpManagerForOidc >>= \case
       Left mock -> pure $ (mopDiscover mock) issuerLoc
       Right mgr -> liftIO $ discover issuerLoc mgr
@@ -384,9 +386,19 @@ makeSessionStore = do
     , sessionStoreSave = \state nonce -> unlift $ do
         setSessionBS stateSessionKey state
         setSessionBS nonceSessionKey nonce
+#if MIN_VERSION_oidc_client(0,7,0)
+    , sessionStoreGet = \untrustedState -> unlift $ do
+        (mState, mNonce) <-
+          (,) <$> lookupSessionBS stateSessionKey
+              <*> lookupSessionBS nonceSessionKey
+        if mState /= Just untrustedState
+          then pure Nothing
+          else pure mNonce
+#else
     , sessionStoreGet = unlift $
         (,) <$> lookupSessionBS stateSessionKey
             <*> lookupSessionBS nonceSessionKey
+#endif
     , sessionStoreDelete = unlift $ do
         deleteSession stateSessionKey
         deleteSession nonceSessionKey
@@ -429,9 +441,10 @@ forward loginHint provider@(Provider cfg _keyset) clientId = do
   -- but the oidc-client haskell library still asks for it inside the
   -- 'OIDC' type. We purposefully throw a 500 error if the value is used.
   oidc <- makeOIDC provider clientId (ClientSecret "DUMMY") <&> \oidc' -> oidc'
-    { oidcClientSecret =
-        error "client_secret should never be used in the authentication \
-              \request as it would undesirably expose the secret to the user"
+    { oidcClientSecret = error $ unwords
+        [ "client_secret should never be used in the authentication "
+        , "request as it would undesirably expose the secret to the user"
+        ]
     }
   let extraParams =
         [("login_hint", Just $ urlEncode False $ encodeUtf8 loginHint)]
@@ -458,10 +471,19 @@ asTrustedState :: (YesodAuthOIDC site, MonadAuthHandler site m)
   => SessionStore IO -> [Text] ->  m Text
 asTrustedState sessionStore = \case
   [untrustedState] -> do
-    (mState, _) <- liftIO $ sessionStoreGet sessionStore
+#if MIN_VERSION_oidc_client(0,7,0)
+    -- In this case, there's no point in validating the state - we
+    -- need to thread this value through to the code later, and when
+    -- the code reads the nonce, the state will be validated
+    --
+    -- We're using 'const' to avoid an unuse warning in the function arg
+    pure $ const untrustedState sessionStore
+#else
+    (mState, _) <- liftIO $ sessionStoreGet sessionStore untrustedState
     if fmap decodeUtf8 mState /= Just untrustedState
       then onBadCallbackRequest Nothing
       else pure untrustedState
+#endif
   _ -> onBadCallbackRequest Nothing
 
 processCallbackInput :: (YesodAuthOIDC site, MonadAuthHandler site m)
