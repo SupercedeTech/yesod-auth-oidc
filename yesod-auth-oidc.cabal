@@ -15,6 +15,7 @@ description:
   Authorization Code flow (AKA server flow).
 
   Please see the README.md file for more documentation.
+extensions: CPP
 
 tested-with: GHC == 8.10.4
 
@@ -44,7 +45,7 @@ common common-options
       http-client                       >= 0.6.4 && < 1,
       jose-jwt                          >= 0.9.2 && < 0.10,
 
-      oidc-client                       >= 0.6.0 && < 0.7,
+      oidc-client                       >= 0.6.0 && < 0.8,
 
       shakespeare                       >= 2.0.25 && < 2.1,
 
