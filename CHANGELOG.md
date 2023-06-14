@@ -5,6 +5,7 @@
 + drop executable for the test suite,
   this should prune a bunch of hackage dependencies.
 + bump bounds.
++ Run cabal fmt
 
 ## 0.1.2
 
