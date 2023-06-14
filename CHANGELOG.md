@@ -1,5 +1,9 @@
 # Changelog for yesod-auth-oidc
 
+## 0.1.5
+
++ Add bounds to containers
+
 ## 0.1.4
 
 + Add release command that excludes the test suite from the hackage release
