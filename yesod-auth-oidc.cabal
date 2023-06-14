@@ -1,6 +1,6 @@
 cabal-version:      2.2
 name:               yesod-auth-oidc
-version:            0.1.3
+version:            0.1.4
 build-type:         Simple
 category:           Web, Yesod
 extra-source-files: README.md

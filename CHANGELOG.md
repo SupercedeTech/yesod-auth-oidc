@@ -1,5 +1,10 @@
 # Changelog for yesod-auth-oidc
 
+## 0.1.4
+
++ Add release command that excludes the test suite from the hackage release
+  The test suite causes serious issues with stackage, since broch isn't on hackage.
+
 ## 0.1.3
 
 + drop executable for the test suite,
